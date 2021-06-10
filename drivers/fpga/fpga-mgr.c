@@ -585,8 +585,10 @@ struct fpga_manager *fpga_mgr_create(struct device *parent, const char *name,
 		return NULL;
 
 	id = ida_simple_get(&fpga_mgr_ida, 0, 0, GFP_KERNEL);
-	if (id < 0)
-		goto error_kfree;
+	if (id < 0) {
+		kfree(mgr);
+		return NULL;
+	}
 
 	mutex_init(&mgr->ref_mutex);
 
@@ -602,17 +604,12 @@ struct fpga_manager *fpga_mgr_create(struct device *parent, const char *name,
 	mgr->dev.id = id;
 
 	ret = dev_set_name(&mgr->dev, "fpga%d", id);
-	if (ret)
-		goto error_device;
+	if (ret) {
+		put_device(&mgr->dev);
+		return NULL;
+	}
 
 	return mgr;
-
-error_device:
-	ida_simple_remove(&fpga_mgr_ida, id);
-error_kfree:
-	kfree(mgr);
-
-	return NULL;
 }
 EXPORT_SYMBOL_GPL(fpga_mgr_create);
 
@@ -622,8 +619,7 @@ EXPORT_SYMBOL_GPL(fpga_mgr_create);
  */
 void fpga_mgr_free(struct fpga_manager *mgr)
 {
-	ida_simple_remove(&fpga_mgr_ida, mgr->dev.id);
-	kfree(mgr);
+	put_device(&mgr->dev);
 }
 EXPORT_SYMBOL_GPL(fpga_mgr_free);
 
@@ -692,16 +688,11 @@ int fpga_mgr_register(struct fpga_manager *mgr)
 
 	ret = device_add(&mgr->dev);
 	if (ret)
-		goto error_device;
+		return ret;
 
 	dev_info(&mgr->dev, "%s registered\n", mgr->name);
 
 	return 0;
-
-error_device:
-	ida_simple_remove(&fpga_mgr_ida, mgr->dev.id);
-
-	return ret;
 }
 EXPORT_SYMBOL_GPL(fpga_mgr_register);
 
@@ -722,7 +713,7 @@ void fpga_mgr_unregister(struct fpga_manager *mgr)
 	if (mgr->mops->fpga_remove)
 		mgr->mops->fpga_remove(mgr);
 
-	device_unregister(&mgr->dev);
+	device_del(&mgr->dev);
 }
 EXPORT_SYMBOL_GPL(fpga_mgr_unregister);
 
@@ -781,6 +772,10 @@ EXPORT_SYMBOL_GPL(devm_fpga_mgr_register);
 
 static void fpga_mgr_dev_release(struct device *dev)
 {
+	struct fpga_manager *mgr = to_fpga_manager(dev);
+
+	ida_simple_remove(&fpga_mgr_ida, mgr->dev.id);
+	kfree(mgr);
 }
 
 static int __init fpga_mgr_class_init(void)
