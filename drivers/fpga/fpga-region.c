@@ -204,8 +204,10 @@ struct fpga_region
 		return NULL;
 
 	id = ida_simple_get(&fpga_region_ida, 0, 0, GFP_KERNEL);
-	if (id < 0)
-		goto err_free;
+	if (id < 0) {
+		kfree(region);
+		return NULL;
+	}
 
 	region->mgr = mgr;
 	region->get_bridges = get_bridges;
@@ -219,17 +221,12 @@ struct fpga_region
 	region->dev.id = id;
 
 	ret = dev_set_name(&region->dev, "region%d", id);
-	if (ret)
-		goto err_remove;
+	if (ret) {
+		put_device(&region->dev);
+		return NULL;
+	}
 
 	return region;
-
-err_remove:
-	ida_simple_remove(&fpga_region_ida, id);
-err_free:
-	kfree(region);
-
-	return NULL;
 }
 EXPORT_SYMBOL_GPL(fpga_region_create);
 
@@ -239,8 +236,7 @@ EXPORT_SYMBOL_GPL(fpga_region_create);
  */
 void fpga_region_free(struct fpga_region *region)
 {
-	ida_simple_remove(&fpga_region_ida, region->dev.id);
-	kfree(region);
+	put_device(&region->dev);
 }
 EXPORT_SYMBOL_GPL(fpga_region_free);
 
@@ -310,12 +306,16 @@ EXPORT_SYMBOL_GPL(fpga_region_register);
  */
 void fpga_region_unregister(struct fpga_region *region)
 {
-	device_unregister(&region->dev);
+	device_del(&region->dev);
 }
 EXPORT_SYMBOL_GPL(fpga_region_unregister);
 
 static void fpga_region_dev_release(struct device *dev)
 {
+	struct fpga_region *region = to_fpga_region(dev);
+
+	ida_simple_remove(&fpga_region_ida, region->dev.id);
+	kfree(region);
 }
 
 /**
